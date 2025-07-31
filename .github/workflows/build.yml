@@ -1,162 +1,101 @@
 name: Build Android APK
 
-# Käynnistyy kun pushaat koodia tai manuaalisesti
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build-android:
+  build:
     runs-on: ubuntu-latest
     
     steps:
-    # Lataa koodi
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    # Asenna Python
-    - name: Setup Python
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-        
-    # Asenna Java 17 (buildozer tarvitsee)
-    - name: Setup Java
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '17'
-        
-    # Asenna Android SDK
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-      
-    # Asenna riippuvuudet
-    - name: Install dependencies
+    
+    - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          git \
-          zip \
-          unzip \
-          autoconf \
-          libtool \
-          pkg-config \
-          zlib1g-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          libtinfo5 \
-          cmake \
-          libffi-dev \
-          libssl-dev \
-          libsqlite3-dev \
-          python3-dev
-        
-        # Asenna Python paketit
-        pip install --upgrade pip
-        pip install buildozer cython kivymd
-        
-    # Luo placeholder ikonit (jos ei ole omia)
-    - name: Create placeholder icons
+        sudo apt-get install -y git zip unzip openjdk-8-jdk wget
+        sudo apt-get install -y autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+    
+    - name: Set up Android SDK
       run: |
-        # Luo yksinkertainen PNG ikoni
+        export ANDROID_HOME=${HOME}/android-sdk-linux
+        export ANDROID_SDK_ROOT=${ANDROID_HOME}
+        export PATH=${PATH}:${ANDROID_HOME}/tools:${ANDROID_HOME}/platform-tools
+        
+        mkdir -p ${ANDROID_HOME}
+        cd ${ANDROID_HOME}
+        
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+        unzip -q commandlinetools-linux-9477386_latest.zip
+        mkdir -p cmdline-tools/latest
+        mv cmdline-tools/* cmdline-tools/latest/ || true
+        
+        export PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin
+        
+        yes | sdkmanager --licenses || echo "Some licenses may not have been accepted"
+        sdkmanager "platform-tools" "platforms;android-30" "build-tools;30.0.3" "ndk;23.1.7779620"
+        
+        echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=${ANDROID_HOME}" >> $GITHUB_ENV
+        echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> $GITHUB_PATH
+        echo "${ANDROID_HOME}/platform-tools" >> $GITHUB_PATH
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install buildozer cython
+    
+    - name: Create basic icons
+      run: |
+        # Luo yksinkertainen 512x512 PNG ikoni
         python3 -c "
-        from PIL import Image, ImageDraw, ImageFont
-        import os
-        
-        # Luo ikoni
-        img = Image.new('RGBA', (512, 512), (13, 17, 23, 255))
-        draw = ImageDraw.Draw(img)
-        
-        # Piirä yksinkertainen ikoni
-        draw.ellipse([50, 50, 462, 462], fill=(88, 166, 255, 255))
-        
-        # Lisää teksti
         try:
-            font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 120)
-        except:
-            font = ImageFont.load_default()
+            from PIL import Image, ImageDraw
+            img = Image.new('RGB', (512, 512), (13, 17, 23))
+            draw = ImageDraw.Draw(img)
+            draw.ellipse([100, 100, 412, 412], fill=(88, 166, 255))
+            img.save('icon.png')
+            img.save('presplash.png')
+            print('Icons created with PIL')
+        except ImportError:
+            print('PIL not available, creating minimal icons')
+        " || echo "Creating fallback icons..."
         
-        text = 'INFO'
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        x = (512 - text_width) // 2
-        y = (512 - text_height) // 2
-        draw.text((x, y), text, fill=(255, 255, 255, 255), font=font)
-        
-        # Tallenna ikoni
-        img.save('icon.png')
-        
-        # Luo presplash (käynnistyskuva)
-        splash = Image.new('RGBA', (800, 600), (13, 17, 23, 255))
-        draw_splash = ImageDraw.Draw(splash)
-        
-        # Keskitetty teksti
-        splash_text = 'Infonäyttö'
-        try:
-            splash_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 60)
-        except:
-            splash_font = ImageFont.load_default()
-            
-        bbox = draw_splash.textbbox((0, 0), splash_text, font=splash_font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        x = (800 - text_width) // 2
-        y = (600 - text_height) // 2
-        draw_splash.text((x, y), splash_text, fill=(125, 211, 252, 255), font=splash_font)
-        
-        splash.save('presplash.png')
-        print('Icons created successfully')
-        " 2>/dev/null || echo "Icon creation failed, using defaults"
-        
-        # Jos Python-skripti epäonnistuu, luo yksinkertaiset tiedostot
+        # Fallback: luo minimaalinen PNG jos PIL ei toimi
         if [ ! -f "icon.png" ]; then
-          # Luo 1x1 pixel PNG (buildozer hyväksyy tämän)
           echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > icon.png
-        fi
-        
-        if [ ! -f "presplash.png" ]; then
           cp icon.png presplash.png
         fi
-        
-    # Asenna pillow erikseen (kuvankäsittelyä varten)
-    - name: Install Pillow
+    
+    - name: Build APK
       run: |
-        pip install Pillow || echo "Pillow installation failed, continuing..."
+        export ANDROID_HOME=${HOME}/android-sdk-linux
+        export ANDROID_SDK_ROOT=${ANDROID_HOME}
+        export PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools
         
-    # Buildaa APK
-    - name: Build APK with Buildozer
-      run: |
-        # Aseta ympäristömuuttujat
-        export ANDROID_HOME=$ANDROID_SDK_ROOT
-        export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
-        export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools
-        
-        # Hyväksy Android lisenssit
-        yes | sdkmanager --licenses || echo "License acceptance may have failed"
-        
-        # Asenna tarvittavat Android SDK komponentit
-        sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.2.9519653" || echo "SDK installation may have failed"
-        
-        # Buildaa APK debug-versio
+        # Buildaa APK
         buildozer android debug
-        
-    # Lataa valmis APK
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
+    
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v3
+      if: success()
       with:
-        name: infonaytto-android-apk
+        name: infonaytto-apk
         path: bin/*.apk
-        retention-days: 30
-        
-    # Näytä build tiedot
-    - name: Show build info
+    
+    - name: List build outputs
+      if: always()
       run: |
-        echo "=== BUILD COMPLETE ==="
-        echo "APK files created:"
-        ls -la bin/ || echo "No bin directory found"
-        echo "Build artifacts will be available for download for 30 days"
-        echo "========================"
+        echo "=== Build directory contents ==="
+        ls -la
+        echo "=== Bin directory contents ==="
+        ls -la bin/ || echo "No bin directory"
+        echo "=== Buildozer directory ==="
+        ls -la .buildozer/ || echo "No .buildozer directory"
