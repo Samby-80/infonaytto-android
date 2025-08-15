@@ -1,1 +1,0 @@
-# infonaytto-android
